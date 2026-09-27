@@ -4,6 +4,7 @@
 import argparse
 import gzip
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -13,6 +14,10 @@ from pathlib import Path
 
 
 CARDS = Path(__file__).resolve().parent / "cards"
+DEFAULT_DELPHES = Path(os.environ.get(
+    "HHH_DELPHES_BINARY",
+    "/data/atlas02/users/dingleyt/FCChh/key4/k4SimDelphes/build2/standalone/DelphesPythia8_EDM4HEP",
+))
 WEIGHT_POINTS = [
     (-1.0, -1.0), (0.0, -2.0), (-2.0, 0.0),
     (0.0, -1.0), (-1.0, 0.0), (-2.0, -1.0),
@@ -186,7 +191,8 @@ def main():
     lhe.add_argument("--seed", type=int, required=True)
     lhe.add_argument("--events", type=int, default=10)
     delphes = sub.add_parser("delphes", help="Shower and reconstruct an LHE sample")
-    delphes.add_argument("--delphes", type=Path, required=True)
+    delphes.add_argument("--delphes", type=Path, default=DEFAULT_DELPHES,
+                         help=f"Delphes executable (default: {DEFAULT_DELPHES})")
     delphes.add_argument("--lhe", type=Path, required=True)
     delphes.add_argument("--output", type=Path, required=True)
     delphes.add_argument("--seed", type=int, required=True)

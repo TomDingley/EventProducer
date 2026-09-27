@@ -9,8 +9,11 @@ directory, so no manual format conversion is needed.
 
 Source the environment containing MG5's dependencies and LHAPDF before running
 the LHE stage. Source the appropriate key4hep environment before running the
-Delphes stage. Pass paths explicitly; no production output directory is fixed
-in the scripts. The MG5 work directory is retained for logs and provenance.
+Delphes stage. The Delphes stage currently defaults to the local
+`/data/atlas02/users/dingleyt/FCChh/key4/k4SimDelphes/build2/standalone/DelphesPythia8_EDM4HEP`
+executable. Override it with `--delphes` or `HHH_DELPHES_BINARY`. All other
+tool and output paths are passed explicitly. The MG5 work directory is retained
+for logs and provenance.
 
 The Delphes executable must be built from `TomDingley/k4SimDelphes` branch
 `weightNamesPythia`, commit `be648e4`. That revision preserves LHE weight IDs
@@ -20,10 +23,10 @@ base commit `e2ade58`, so the change can also be reviewed or applied locally.
 The submodule does not contain a Delphes binary. Keep the binary's build and
 key4hep release recorded with each production.
 
-For a ten-event old/new smoke test, run `test_generation.sh` with seven arguments:
+For a ten-event old/new smoke test, run `test_generation.sh` with six arguments:
 an existing EventProd `4b2tau` LHE file, the MG5 2.9.24 directory, the
-`lhapdf-config` executable, the patched `DelphesPythia8_EDM4HEP` executable,
-and a fresh output directory, followed by the LCG and key4hep setup scripts.
+`lhapdf-config` executable, a fresh output directory, and the LCG and key4hep
+setup scripts. An optional seventh argument overrides the Delphes executable.
 It creates both LHE and ROOT comparison reports, with generator logs alongside.
 Use a fresh output directory for a repeat run. The samples have different seeds,
 so the comparison checks process content, decay, weight IDs/order, and retention
@@ -38,3 +41,11 @@ The first ten-event run is recorded in `tests/smoke_2026-09-27.md`. For MG5,
 use a clean 2.9.24 extraction or a complete installation with CutTools built
 using the active compiler; the old unpacked EventProd directory is missing a
 Python module, and another local installation had an incompatible CutTools build.
+
+Upstream k4SimDelphes added Pythia8 generator variation weights in
+[PR #158](https://github.com/key4hep/k4SimDelphes/pull/158). That implementation
+uses Pythia's `weightValueVector()` and `weightNameVector()`; for this HHH LHE
+input, Pythia exposes only the nominal name `Weight`, while the LHE contains
+nine `rwgt_*` weights. It therefore cannot replace the local LHE-weight patch
+for this analysis yet. Juraj's [PR #159](https://github.com/key4hep/k4SimDelphes/pull/159)
+adds RNTuple output rather than LHE reweight propagation.
