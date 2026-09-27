@@ -1,0 +1,113 @@
+diff --git a/standalone/src/DelphesInputReader.h b/standalone/src/DelphesInputReader.h
+index 2a94ecd..686c169 100644
+--- a/standalone/src/DelphesInputReader.h
++++ b/standalone/src/DelphesInputReader.h
+@@ -24,6 +24,10 @@ public:
+                          TObjArray* stableParticleOutputArray, TObjArray* partonOutputArray) = 0;
+ 
+   virtual TTree* converterTree() = 0;
++  virtual const std::vector<std::string>& getWeightNames() const {
++    static const std::vector<std::string> empty;
++    return empty;
++  }
+ };
+ 
+ #endif
+diff --git a/standalone/src/DelphesMain.h b/standalone/src/DelphesMain.h
+index fde2c89..44f8e4b 100644
+--- a/standalone/src/DelphesMain.h
++++ b/standalone/src/DelphesMain.h
+@@ -74,6 +74,16 @@ int doit(int argc, char* argv[], DelphesInputReader& inputReader) {
+       for (auto& [name, coll] : edm4hepConverter.getCollections()) {
+         frame.put(std::move(coll), name);
+       }
++      // write out LHEF weights once (if available)
++      static bool weightNames_stored = false;
++      if (!weightNames_stored) {
++        const auto& weightNames = inputReader.getWeightNames();
++        if (!weightNames.empty()) {
++          std::cout << "Writing LHEF weight ID vector of strings with size " << weightNames.size() << std::endl;
++          frame.putParameter<std::vector<std::string>>(edm4hep::labels::EventWeightsNames, weightNames);
++          weightNames_stored = true;
++        }
++      }
+       podioWriter.writeFrame(frame, "events");
+ 
+       modularDelphes->Clear();
+diff --git a/standalone/src/DelphesPythia8Common.h b/standalone/src/DelphesPythia8Common.h
+index b7912b7..aec0f2e 100644
+--- a/standalone/src/DelphesPythia8Common.h
++++ b/standalone/src/DelphesPythia8Common.h
+@@ -190,4 +190,36 @@ void fillPartons(int id, double pMax, double etaMax, Pythia8::Event& event, Pyth
+   }
+ }
+ 
++std::vector<std::string> getWeightNames(const std::string& lheFilePath) {
++  std::ifstream lheFile(lheFilePath);
++  std::vector<std::string> weightIDs;
++
++  if (!lheFile.is_open()) {
++    std::cerr << "Failed to open LHE file: " << lheFilePath << std::endl;
++    return weightIDs;
++  }
++
++  std::string line;
++  while (std::getline(lheFile, line)) {
++    // Stop after the initrwgt block
++    if (line.find("</initrwgt>") != std::string::npos) {
++      break;
++    }
++
++    size_t idPos = line.find("weight id='");
++    if (idPos != std::string::npos) {
++      size_t start = line.find("'", idPos);
++      size_t end = line.find("'", start + 1);
++      if (start != std::string::npos && end != std::string::npos) {
++        std::string id = line.substr(start + 1, end - start - 1);
++        weightIDs.push_back(id);
++        std::cout << "Found weight ID: " << id << std::endl;
++      }
++    }
++  }
++
++  lheFile.close();
++  return weightIDs;
++}
++
+ #endif
+diff --git a/standalone/src/DelphesPythia8Reader.h b/standalone/src/DelphesPythia8Reader.h
+index fb8818f..1ae3208 100644
+--- a/standalone/src/DelphesPythia8Reader.h
++++ b/standalone/src/DelphesPythia8Reader.h
+@@ -36,6 +36,9 @@ public:
+       PrintXS(m_pythia.get());
+   }
+ 
++  const std::vector<std::string>& getWeightNames() const {
++    return m_weightNames;
++  }
+   std::string init(Delphes* modularDelphes, int argc, char* argv[]) override {
+     if (argc != 5) {
+       return "";
+@@ -107,6 +110,12 @@ public:
+ 
+         if (!m_branchWeightLHEF) {
+           std::cerr << "Error: m_branchWeightLHEF failed to initialise." << std::endl;
++        } else {
++          m_weightNames = ::getWeightNames(m_pythia->word("Beams:LHEF"));
++          std::cout << "Found " << m_weightNames.size() << " weight names in initrwgt:\n";
++          for (const auto& id : m_weightNames) {
++            std::cout << "  " << id << "\n";
++          }
+         }
+ 
+         m_allParticleOutputArrayLHEF = modularDelphes->ExportArray("allParticlesLHEF");
+@@ -202,6 +211,8 @@ private:
+   std::unique_ptr<TTree> m_converterTree{nullptr};
+ 
+   ExRootTreeBranch *m_brancheEventLHEF = 0, *m_branchWeightLHEF = 0;
++  // arrays to store weight names
++  std::vector<std::string> m_weightNames;
+   TObjArray *m_stableParticleOutputArrayLHEF = 0, *m_allParticleOutputArrayLHEF = 0, *m_partonOutputArrayLHEF = 0;
+   DelphesLHEFReader* reader = 0;
+   Long64_t m_eventCounter{0}, m_errorCounter{0};

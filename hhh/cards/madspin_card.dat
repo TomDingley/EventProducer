@@ -1,0 +1,27 @@
+#************************************************************
+#*                        MadSpin                           *
+#*                                                          *
+#*    MadGraph5_aMC@NLO Framework                           *
+#************************************************************
+# Some options
+# set seed 1
+# set Nevents_for_max_weight 75  # (Optional) number of events to optimize max weight
+# set BW_cut 15                  # (Optional) off-shellness cutoff
+# set spinmode onshell           # (Optional) use onshell spin correlations
+set max_weight_ps_point 400      # Important for 3 Higgs, to get good unweighting
+
+# Specify the decays
+
+# Higgs (h) PDG code is 25
+# We want:
+#   - 2 Higgs decaying into b bbar
+#   - 1 Higgs decaying into tau+ tau-
+
+set max_weight_ps_point 400
+set spinmode none 
+
+decay h > b b~
+decay h > b b~
+decay h > ta+ ta-
+
+launch

@@ -1,0 +1,36 @@
+set auto_convert_model T
+import model loop_sm_c3d4
+generate g g > h h h [QCD]
+
+output DUMMYPROCESS
+
+######## DELIMITER (!!! NEED THIS LINE !!!) ##################
+
+set lhapdf /data/atlas/users/dingleyt/FCChh/LHAPDF/LHAPDF-6.3.0/install/bin/lhapdf-config
+
+launch DUMMYPROCESS
+reweight=ON
+madspin=ON
+
+set iseed DUMMYSEED
+set nevents DUMMYNEVENTS
+
+set pdlabel lhapdf
+set lhaid 260000
+
+set ebeam1 42000
+set ebeam2 42000
+
+set ickkw 0
+set bwcutoff 10.0
+
+set ptb 15.0
+set mmbb 30.0
+
+set etaj 5.0
+set etab 5.0
+set etaa 8.0
+set etal 8.0
+
+set use_syst False
+
