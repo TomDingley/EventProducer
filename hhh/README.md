@@ -44,8 +44,12 @@ Python module, and another local installation had an incompatible CutTools build
 
 Upstream k4SimDelphes added Pythia8 generator variation weights in
 [PR #158](https://github.com/key4hep/k4SimDelphes/pull/158). That implementation
-uses Pythia's `weightValueVector()` and `weightNameVector()`; for this HHH LHE
-input, Pythia exposes only the nominal name `Weight`, while the LHE contains
-nine `rwgt_*` weights. It therefore cannot replace the local LHE-weight patch
-for this analysis yet. Juraj's [PR #159](https://github.com/key4hep/k4SimDelphes/pull/159)
-adds RNTuple output rather than LHE reweight propagation.
+uses Pythia's `weightValueVector()` and `weightNameVector()`. For this HHH LHE
+input, the vectors contain only the nominal `Weight` just after `init()`, but
+after the first `next()` they contain `Weight` followed by `AUX_rwgt_1` through
+`AUX_rwgt_9`. The values of the latter nine match the LHE reweights. Thus an
+upstream build including PR #158 can replace the local patch once the analysis
+accounts for the extra nominal entry at index 0 and production validation
+checks the ten names and values. See `tests/pythia_weights.md`. Juraj's
+[PR #159](https://github.com/key4hep/k4SimDelphes/pull/159) adds RNTuple output.
+The default remains the locally tested executable until that migration is made.
