@@ -4,13 +4,15 @@
 import os, sys
 import subprocess
 import time
+import shlex
+from pathlib import Path
 import EventProducer.common.utils as ut
 import EventProducer.common.makeyaml as my
 
 class send_mglhe():
 
 #__________________________________________________________
-    def __init__(self, islsf, iscondor, mg5card, cutfile, model, para, procname, njobs, nev, queue, priority, ncpus, do_EL7, useV3=False, plugin=""):
+    def __init__(self, islsf, iscondor, mg5card, cutfile, model, para, procname, njobs, nev, queue, priority, ncpus, do_EL7, useV3=False, plugin="", reweight_card="", madspin_card="", dry_run=False, prepare_only=False):
         self.islsf     = islsf
         self.iscondor  = iscondor
         self.user      = os.environ['USER']
@@ -27,10 +29,14 @@ class send_mglhe():
         self.do_EL7    = do_EL7
         self.useV3     = useV3
         self.plugin     = plugin
+        self.reweight_card = reweight_card or ''
+        self.madspin_card = madspin_card or ''
+        self.dry_run = dry_run
+        self.prepare_only = prepare_only
 
 #__________________________________________________________
     def send(self):
-        Dir = os.getcwd()
+        Dir = str(Path(__file__).resolve().parents[1])
         nbjobsSub=0
 
         # output dir
@@ -40,7 +46,16 @@ class send_mglhe():
         if 'HELHC' in self.para.module_name:  acctype='HELHC'
         elif 'FCCee' in self.para.module_name:  acctype='FCCee'
 
-        logdir=Dir+"/BatchOutputs/%s/lhe/%s"%(acctype,self.procname)
+        logdir=str(Path(getattr(self.para, 'batch_dir', Dir+'/BatchOutputs')) / acctype / 'lhe' / self.procname)
+        for card in (self.mg5card, self.reweight_card, self.madspin_card):
+            if card and not os.path.isfile(card):
+                raise FileNotFoundError(card)
+        if 'FCChh' in self.para.module_name and not os.path.isfile(self.para.mg5_dir+'/bin/mg5_aMC'):
+            raise FileNotFoundError(self.para.mg5_dir+'/bin/mg5_aMC')
+        if self.dry_run:
+            print(f'Dry run: {self.njobs} MG5 jobs, {self.nev} events/job; output {outdir}{self.procname}')
+            print(f'MG5 card: {self.mg5card}; reweight card: {self.reweight_card}; MadSpin card: {self.madspin_card}')
+            return
 
         if not ut.dir_exist(logdir):
             os.system("mkdir -p %s"%logdir)
@@ -52,13 +67,15 @@ class send_mglhe():
         outdir  = os.path.abspath(outdir)
         mg5card = os.path.abspath(self.mg5card)
         cuts    = os.path.abspath(self.cutfile)
-        model   = os.path.abspath(self.model)
+        model   = os.path.abspath(self.model) if self.model else ''
+        reweight = os.path.abspath(self.reweight_card) if self.reweight_card else ''
+        madspin = os.path.abspath(self.madspin_card) if self.madspin_card else ''
         if self.plugin:
             plugin   = os.path.abspath(self.plugin)
         else:
             plugin = ''
 
-        jobsdir = './BatchOutputs/%s/lhe/%s/'%(acctype,self.procname)
+        jobsdir = logdir+'/'
 
         if not os.path.exists(jobsdir):
            os.makedirs(jobsdir)
@@ -88,12 +105,17 @@ class send_mglhe():
 
             cwd = os.getcwd()
             script = cwd + '/bin/submitMG.sh '
-            if self.useV3:
+            if self.useV3 or 'FCChh' in self.para.module_name:
                 script = cwd + '/bin/submitMG_v3.sh '
+            script = Dir + '/bin/' + Path(script.strip()).name
+            parameters = [mg5card, self.procname, outdir, seed, str(self.nev), cuts, model, plugin,
+                          reweight, madspin,
+                          getattr(self.para, 'mg5_dir', ''), getattr(self.para, 'lhapdf_config', ''),
+                          getattr(self.para, 'generator_setup', '')]
 
             if self.islsf==True :
               cmdBatch = 'bsub -o '+jobsdir+'/std/'+basename +'.out -e '+jobsdir+'/std/'+basename +'.err -q '+self.queue
-              cmdBatch +=' -J '+basename +' "'+script + mg5card+' '+self.procname+' '+outdir+' '+seed+' '+str(self.nev)+' '+cuts+' '+model+' '+plugin+'"'
+              cmdBatch +=' -J '+basename +' '+shlex.join([script, *parameters])
 
               print (cmdBatch)
 
@@ -101,7 +123,9 @@ class send_mglhe():
               job,batchid=ut.SubmitToLsf(cmdBatch,10,1)
               nbjobsSub+=job
             elif self.iscondor==True :
-              condor_file_params_str.append(mg5card+' '+self.procname+' '+outdir+' '+seed+' '+str(self.nev)+' '+cuts+' '+model+' '+plugin+' ')
+              # Condor's quoted argument syntax preserves optional empty arguments.
+              condor_arguments = ' '.join("'" + value.replace("'", "''") + "'" for value in parameters)
+              condor_file_params_str.append('"' + condor_arguments.replace('"', '""') + '"')
               nbjobsSub+=1
 
         if self.iscondor==True :
@@ -140,23 +164,28 @@ class send_mglhe():
                 frun_condor.write('MY.WantOS = "el7"\n')
                 frun_condor.write('environment    = "LS_SUBCWD=%s"\n'%logdir) 
             else:
-                frun_condor.write('getenv         = True\n')
+                frun_condor.write('getenv         = %s\n' % ('False' if 'FCChh' in self.para.module_name else 'True'))
                 frun_condor.write('environment    = "LS_SUBCWD=%s"\n'%logdir) # not sure
-                frun_condor.write('requirements   = ( (OpSysAndVer =?= "AlmaLinux9") && (Machine =!= LastRemoteHost) )\n')
+                frun_condor.write('requirements   = (OpSysAndVer =?= "AlmaLinux9") && (TARGET.has_avx2 =?= True)\n')
 
             frun_condor.write('on_exit_remove = (ExitBySignal == False) && (ExitCode == 0)\n')
             frun_condor.write('max_retries    = 3\n')
             frun_condor.write('+JobFlavour    = "%s"\n'%self.queue)
             frun_condor.write('+AccountingGroup = "%s"\n'%self.priority)
             frun_condor.write('RequestCpus = %s\n'%self.ncpus)
+            frun_condor.write('request_memory = 8 GB\nrequest_disk = 10 GB\n')
+            frun_condor.write('should_transfer_files = YES\nwhen_to_transfer_output = ON_EXIT\ntransfer_output_files = ""\n')
             frun_condor.write('queue arguments from %s\n'%fparamfull_condor)
             frun_condor.close()
             #
-            nbjobsSub=0
             cmdBatch="condor_submit %s"%frunfull_condor
             print (cmdBatch)
-            job=ut.SubmitToCondor(cmdBatch,10,"%i/%i"%(nbjobsSub,self.njobs))
-            nbjobsSub+=job
+            if self.prepare_only:
+                print('Prepared jobs only; submit with:', cmdBatch)
+            else:
+                job=ut.SubmitToCondor(cmdBatch,10,"%i/%i"%(nbjobsSub,self.njobs))
+                if not job:
+                    raise RuntimeError('Condor submission failed')
 
-        print ('succesfully sent %i  job(s)'%nbjobsSub)
+        print('%s %i job(s)' % ('Prepared' if self.prepare_only else 'Submitted', nbjobsSub))
 

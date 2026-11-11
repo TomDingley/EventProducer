@@ -1,147 +1,83 @@
 #!/bin/bash
+# MG5 worker used by send_mglhe; paths are supplied by param_FCChh.py.
+SCRIPTFILE=$1
+PROCESSNAME=$2
+OUTPUTDIR=$3
+JOBID=$4
+NEVENTS=$5
+CUTFILE=$6
+MODELFILE=$7
+PLUGINFILE=${8:-}
+REWEIGHTCARD=${9:-}
+MADSPINCARD=${10:-}
+MG5ROOT=${11}
+LHAPDFCONFIG=${12}
+GENERATORSETUP=${13}
+
 unset LD_LIBRARY_PATH
 unset PYTHONHOME
 unset PYTHONPATH
-
-# source /cvmfs/sft.cern.ch/lcg/views/LCG_89/x86_64-centos7-gcc7-opt/setup.sh 
-# export LHAPDF_DATA_PATH=/afs/cern.ch/work/b/bistapf/lhapdf/LHAPDF-6.1.6/install/share/LHAPDF/
-
-# source /afs/cern.ch/work/s/selvaggi/private/EventProducerHH/init.sh
-
-SCRIPTFILE=${1}
-PROCESSNAME=${2}
-OUTPUTDIR=${3}
-JOBID=${4}
-NEVENTS=${5}
-CUTFILE=${6}
-MODELFILE=${7}
-PLUGINFILE=${8:-""}
-
-mkdir job
-cd job
-
-source /cvmfs/sft.cern.ch/lcg/views/LCG_107/x86_64-el9-gcc14-opt/setup.sh;
-
-# Create a local fake f2py3.11 pointing to f2py
-mkdir -p $PWD/f2py_bin
-ln -sf $(dirname $(which python3))/f2py $PWD/f2py_bin/f2py3.11
-
-# Prepend it to PATH
-export PATH=$PWD/f2py_bin:$PATH
-
-echo "python3 location: $(which python3)"
-echo "python3 --version: $(python3 --version)"
-echo "numpy version: $(python3 -c 'import numpy; print(numpy.__version__)')"
-echo "f2py3.11 location: $(which f2py3.11)"
-head -5 $(which f2py3.11)
-
-
-
-echo "copying madgraph tarball ..."
-# cp  /eos/experiment/fcc/hh/utils/generators/MG5_aMC_v2.5.5.tar.gz .
-cp  /eos/experiment/fcc/hh/utils/generators/MG5_aMC_v3.6.3pre.tar.gz .
-echo "finished copying madgraph tarball version 3.6.3pre"
-tar -xzf MG5_aMC_v3.6.3pre.tar.gz
-
-echo "finished untaring madgraph tarball version 3.6.3pre"
-cd MG5_aMC_v3.6.3pre
-
-# parse script file
-cp ${SCRIPTFILE} .
-
-echo "Copying script file ${SCRIPTFILE}"
-SCRIPT=$(basename $SCRIPTFILE)
-
-# if asking for custom plug in as well, copy it here:
-if [ -n "${PLUGINFILE}" ]; then
-    echo "Adding custom plug in code: $PLUGINFILE"
-    if [ -f "$PLUGINFILE" ]; then
-      cp ${PLUGINFILE} PLUGIN
-    else
-      echo "ERROR - requested plug in file not found at: $PLUGINFILE"
-    fi    
-else
-    echo "Not custom plug in file specified."
+source "$GENERATORSETUP" || exit 1
+MG5="$MG5ROOT/bin/mg5_aMC"
+if [ ! -f "$MG5" ] || [ "$NEVENTS" -lt 1 ] || [ "$NEVENTS" -gt 10000 ]; then
+    echo "Invalid MG5 installation or event count" >&2
+    exit 1
+fi
+OUTDIR="$OUTPUTDIR/$PROCESSNAME"
+OUTFILE="$OUTDIR/events_$JOBID.lhe.gz"
+if [ -e "$OUTFILE" ]; then
+    echo "Output already exists: $OUTFILE" >&2
+    exit 1
 fi
 
-
+mkdir job || exit 1
+cd job || exit 1
+cp "$SCRIPTFILE" card.mg5 || exit 1
 SEED=$((10#$JOBID))
+sed -i -e "s/DUMMYSEED/$SEED/g" -e "s/DUMMYNEVENTS/$NEVENTS/g" card.mg5 || exit 1
+csplit --digits=2 --quiet --prefix=config card.mg5 '/DELIMITER/+1' '{*}' || exit 1
+sed -i "s|^set lhapdf .*|set lhapdf $LHAPDFCONFIG|" config01 || exit 1
 
-
-# replace dummyvalues
-echo "Replacing dummy values"
-sed -i -e "s/DUMMYSEED/${SEED}/g" ${SCRIPT}
-sed -i -e "s/DUMMYNEVENTS/${NEVENTS}/g" ${SCRIPT}
-
-# split into proc and run
-echo "Splitting input config file..."
-csplit --digits=2  --quiet --prefix=config ${SCRIPT} "/DELIMITER/+1" "{*}"
-
-# add cuts.f if specified
-if [ -f "${MODELFILE}" ]; then
-    echo "Adding model tarball"
-    cp ${MODELFILE} models
-    echo $(basename $MODELFILE)
-    tar -xzvf models/$(basename $MODELFILE)
-    tar -xvf models/$(basename $MODELFILE)
-else
-    echo "model file not specified."
-fi;
-
-# create process
-echo "Configuring process..."
-./bin/mg5_aMC config00
-
-# add cuts.f if specified
-if [ -f "${CUTFILE}" ]; then
-    echo "Adding cuts.f file"
-    cp ${CUTFILE} DUMMYPROCESS/SubProcesses/cuts.f
-else
-    echo "cuts.f file not specified, using the default one"
-fi;
-
-
-# now run MG5 job
-echo "Launching process..."
-./bin/mg5_aMC config01
-
-# copy output where specified
-OUTDIR=${OUTPUTDIR}/${PROCESSNAME}
-OUTFILE=${OUTDIR}/events_${JOBID}.lhe.gz
-
-echo "Copying LHE file to ${OUTFILE}"
-echo "OUTDIR = ${OUTDIR}"
-mkdir -p ${OUTDIR}
-
-echo "Current working directory = ${PWD}"
-
-# check if this run is decayed or not
-if [ -d "${PWD}/DUMMYPROCESS/Events/run_01_decayed_1" ]; then
-  echo "Found directory: ${PWD}/DUMMYPROCESS/Events/run_01_decayed_1"
-  echo "Using MadSpin decayed events"
-  INFILE="${PWD}/DUMMYPROCESS/Events/run_01_decayed_1/unweighted_events.lhe.gz"
-else
-  echo "Did NOT find directory: ${PWD}/DUMMYPROCESS/Events/run_01_decayed_1"
-  echo "Using standard events"
-  INFILE="${PWD}/DUMMYPROCESS/Events/run_01/unweighted_events.lhe.gz"
+# Extract custom models in this job, without changing the MG5 installation.
+if [ -f "$MODELFILE" ]; then
+    tar -xf "$MODELFILE" || exit 1
+    MODELNAME=$(awk '$1 == "import" && $2 == "model" {print $3; exit}' config00)
+    MODELPATH=$(find "$PWD" -type d -name "$MODELNAME" -print -quit)
+    if [ -z "$MODELPATH" ]; then
+        echo "Model $MODELNAME was not found in $MODELFILE" >&2
+        exit 1
+    fi
+    sed -i "s|import model $MODELNAME|import model $MODELPATH|" config00 || exit 1
+fi
+if [ -n "$PLUGINFILE" ]; then
+    mkdir -p PLUGIN || exit 1
+    cp "$PLUGINFILE" PLUGIN/ || exit 1
 fi
 
-echo "Input file path = ${INFILE}"
-
-if [ -f "${INFILE}" ]; then
-  echo "Input file exists, ready to copy."
-else
-  echo "ERROR: Input file does not exist!"
-  echo "Listing Events directory for debug:"
-  ls -lh ${PWD}/DUMMYPROCESS/Events/
-  echo "Listing inside run_01_decayed_1 if exists:"
-  ls -lh ${PWD}/DUMMYPROCESS/Events/run_01_decayed_1 || echo "run_01_decayed_1 not found"
-  echo "Listing inside run_01:"
-  ls -lh ${PWD}/DUMMYPROCESS/Events/run_01 || echo "run_01 not found"
-  exit 1
+"$MG5" config00 || exit 1
+if [ -f "$CUTFILE" ]; then
+    cp "$CUTFILE" DUMMYPROCESS/SubProcesses/cuts.f || exit 1
 fi
+if [ -n "$REWEIGHTCARD" ]; then
+    cp "$REWEIGHTCARD" DUMMYPROCESS/Cards/reweight_card.dat || exit 1
+fi
+if [ -n "$MADSPINCARD" ]; then
+    cp "$MADSPINCARD" DUMMYPROCESS/Cards/madspin_card.dat || exit 1
+fi
+"$MG5" config01 || exit 1
 
-# Copy file
-echo "Running xrdcp command:"
-echo "xrdcp -N -v ${INFILE} root://eospublic.cern.ch/${OUTDIR}/events_${JOBID}.lhe.gz"
-xrdcp -N -v ${INFILE} root://eospublic.cern.ch/${OUTDIR}/events_${JOBID}.lhe.gz
+INFILE=$(find DUMMYPROCESS/Events -path '*/run_*_decayed_*/unweighted_events.lhe.gz' | sort | tail -n 1)
+if [ -z "$INFILE" ]; then
+    if [ -n "$MADSPINCARD" ]; then
+        echo "MadSpin did not produce a decayed LHE file" >&2
+        exit 1
+    fi
+    INFILE="DUMMYPROCESS/Events/run_01/unweighted_events.lhe.gz"
+fi
+if [ ! -s "$INFILE" ]; then
+    echo "Missing MG5 output: $INFILE" >&2
+    exit 1
+fi
+mkdir -p "$OUTDIR" || exit 1
+cp "$INFILE" "$OUTFILE" || exit 1
+printf 'Wrote %s\n' "$OUTFILE"

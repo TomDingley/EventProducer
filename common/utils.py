@@ -1,5 +1,4 @@
 import warnings
-import ROOT as r
 import subprocess
 import os
 import sys
@@ -11,6 +10,7 @@ from pwd import getpwuid
 
 #_____________________________________________________________
 def isValidROOTfile(infile):
+    import ROOT as r
     valid = True
     with warnings.catch_warnings(record=True) as was:
         f=r.TFile.Open(infile)
@@ -38,6 +38,8 @@ def getCommandOutput(command):
 
 #__________________________________________________________
 def testeos(f,fs):
+    if f is None:
+        return True
     exist=os.path.isfile(f)
     if exist:
         size = os.path.getsize(f)

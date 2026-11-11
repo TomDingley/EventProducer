@@ -3,3 +3,10 @@
 *.root
 log/
 .sync.lock
+/LHE/
+/DelphesEvents/
+/yaml/
+/BatchOutputs/
+/statistics/
+/dicts/
+/gridpacks/

@@ -31,7 +31,7 @@ python3 "$script_dir/produce.py" compare --old "$old_lhe" --new "$new_lhe" \
     --events 10 > "$outdir/lhe_comparison.json" || exit 1
 echo "Reconstructing old and new events; Delphes logs: $outdir/old_delphes.log and $outdir/new_delphes.log"
 (
-    source "$key4hep_setup" -r 2025-05-29 || exit 1
+    source "$key4hep_setup" -r 2026-04-08 || exit 1
     python3 "$script_dir/produce.py" delphes "${delphes_args[@]}" \
         --lhe "$old_lhe" --output "$outdir/old.root" --seed 910581 --events 10 \
         > "$outdir/old_delphes.log" 2>&1 || exit 1

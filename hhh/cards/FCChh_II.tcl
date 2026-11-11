@@ -315,7 +315,7 @@ module Merger TrackMerger {
 module Efficiency ForwardLooperTracks  {
   set InputArray TrackMerger/tracks
   set OutputArray tracks
-  set UseMomentumVector False
+  set UseMomentumVector false
 
   ## select looping tracks that end up in position |eta| > 6.000 (lost by calo)
   set EfficiencyFormula {

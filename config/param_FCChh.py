@@ -1,31 +1,37 @@
+from pathlib import Path
+
+# Production data defaults to this checkout. Override with bin/run.py --output-dir.
+repo_dir = Path(__file__).resolve().parents[1]
+
+def set_output_dir(directory):
+    global production_dir, lhe_dir, delphes_dir, yamldir, batch_dir, gp_dir
+    global lhe_stat, delphes_stat, lhe_web, delphes_web, procList
+    production_dir = Path(directory).resolve()
+    lhe_dir = str(production_dir / 'LHE') + '/'
+    delphes_dir = str(production_dir / 'DelphesEvents') + '/'
+    yamldir = str(production_dir / 'yaml') + '/'
+    batch_dir = str(production_dir / 'BatchOutputs')
+    gp_dir = str(production_dir / 'gridpacks') + '/'
+    stats_dir = production_dir / 'statistics'
+    lhe_stat = str(stats_dir / 'statlhe.html')
+    delphes_stat = str(stats_dir / 'statdelphesVERSION.html')
+    lhe_web = str(stats_dir / 'LHEevents.txt')
+    delphes_web = str(stats_dir / 'Delphesevents_VERSION.txt')
+    procList = [str(production_dir / 'dicts/FCChh_procDict_VERSION_DETECTOR.json')]
+
+set_output_dir(repo_dir)
+
+# Tool installations: edit these for your site. CVMFS provides the software environments.
+mg5_dir = '/data/atlas02/users/dingleyt/FCChh/new_evtprod/EventProducer/job/MG5_aMC_v2_9_24'
+lhapdf_config = '/data/atlas02/users/dingleyt/FCChh/LHAPDF/LHAPDF-6.3.0/install/bin/lhapdf-config'
+generator_setup = '/cvmfs/sft.cern.ch/lcg/views/LCG_107/x86_64-el9-gcc14-opt/setup.sh'
+delphes_binary = '/data/atlas02/users/dingleyt/FCChh/key4/k4SimDelphes_upstream_v00_08/install/bin/DelphesPythia8_EDM4HEP'
+
 # module
 module_name = 'config/param_FCChh.py'
-# eos tests
-eostest = '/eos/experiment/fcc/hh/tests/testfile.lhe.gz'
-eostest_size = 1312594
-
-# stat
-lhe_stat = "/eos/experiment/fcc/www/data/FCChh/statlhe.html"
-delphes_stat = "/eos/experiment/fcc/www/data/FCChh/statdelphesVERSION.html"
-
-# web
-lhe_web = "/eos/experiment/fcc/www/data/FCChh/LHEevents.txt"
-delphes_web = "/eos/experiment/fcc/www/data/FCChh/Delphesevents_VERSION.txt"
-
-# yaml directory
-yamldir = '/afs/cern.ch/work/f/fccsw/public/FCCDicts/yaml/FCChh/'
-
-# proc lists
-procList = [
-     '/eos/experiment/fcc/hh/utils/FCCDicts/FCChh_procDict_VERSION_DETECTOR.json',
-     '/eos/experiment/fcc/www/data/FCCDicts/FCChh_procDict_VERSION_DETECTOR.json'
-       # '/afs/cern.ch/work/f/fccsw/public/FCCDicts/FCChh_procDict_VERSION.json',
-     ]
-
-##eos directory for MG5@MCatNLO gridpacks
-gp_dir      = '/eos/experiment/fcc/hh/generation/gridpacks/'
-##eos directory for lhe files
-lhe_dir     = '/eos/experiment/fcc/hh/generation/lhe/'
+# No central EOS health check is required for shared local storage.
+eostest = None
+eostest_size = 0
 ##extension
 lhe_ext     ='.lhe.gz'
 
@@ -38,13 +44,10 @@ prodTag = {
     'fcc_v05_scenarioII':'/cvmfs/sw.hsf.org/key4hep/releases/2023-06-05-fcchh/x86_64-centos7-gcc12.2.0-opt/key4hep-stack/2023-08-28-hsn6vj/setup.sh',
     'fcc_v06':'/cvmfs/sw-nightlies.hsf.org/key4hep/setup.sh', #pre-production using nightlies due to unsolve technical issues
     # 'fcc_v06_rltester':'/cvmfs/sw.hsf.org/key4hep/setup.sh -r 2024-11-28',
-    'fcc_v07':'/cvmfs/sw.hsf.org/key4hep/setup.sh -r 2025-01-28', 
+    'fcc_v07':'/cvmfs/sw.hsf.org/key4hep/setup.sh -r 2026-04-08',
 }
 
-defaultstack='/cvmfs/fcc.cern.ch/sw/latest/setup.sh'
-
-##eos directory for FCCSW pythia delphes files
-delphes_dir = '/eos/experiment/fcc/hh/generation/DelphesEvents/'
+defaultstack = prodTag['fcc_v07']
 ##extension
 delphes_ext='.root'
 ##name of the ttree
@@ -53,11 +56,11 @@ treename='events'
 do_weighted = True
 
 ##where the delphes cards are stored
-delphescards_dir = '/eos/experiment/fcc/hh/utils/delphescards/'
+delphescards_dir = str(repo_dir / 'hhh/cards') + '/'
 ##where the pythia cards are stored
-pythiacards_dir  = '/eos/experiment/fcc/hh/utils/pythiacards/'
+pythiacards_dir = str(repo_dir / 'hhh/cards') + '/'
 ##where the FCC config script is stored
-fccconfig_dir    = '/eos/experiment/fcc/hh/utils/config/'
+fccconfig_dir = str(repo_dir / 'hhh/cards') + '/'
 
 ##delphes base card detector: Scenario I or II from v06 onwards, empty is legacy option for earlier productions
 detectors = ['I', 'II', 'II_isoValid', "II_trackCov"]
@@ -74,7 +77,18 @@ delphescard_mr='trackMomentumResolution_DETECTOR.tcl' #from fcc_v05 onwards
 delphescard_base='FCChh_DETECTOR.tcl' #from fcc_v05 onwards
 # delphescard_base='card.tcl' #old card
 ##FCC config script name
-fccconfig='PythiaDelphes_config_v02.py'
+fccconfig = 'edm4hep_output_config.tcl'
+
+mg5_cards = {'mg_pp_hhh_84TeV': str(repo_dir / 'hhh/cards/mg_pp_hhh_84TeV.mg5')}
+models = {'mg_pp_hhh_84TeV': str(repo_dir / 'hhh/cards/loop_sm_c3d4.tar')}
+reweight_cards = {'mg_pp_hhh_84TeV': str(repo_dir / 'hhh/cards/reweight_card.dat')}
+madspin_cards = {'mg_pp_hhh_84TeV': str(repo_dir / 'hhh/cards/madspin_card.dat')}
+pythia_cards = {
+    'mg_pp_hhh_84TeV': 'mgp8_hhh_84TeV_btau.cmd',
+    'mg_pp_ttbb_4f_84TeV': 'ttbb.cmd', 'mg_pp_ttz_5f_84TeV': 'ttz.cmd',
+    'mg_pp_tth_5f_84TeV': 'tth.cmd', 'mg_pp_tttt_5f_84TeV': 'tttt.cmd',
+    'mg_pp_zzz_5f_84TeV': 'zzz.cmd',
+}
 
 # list of processes only with Pythia, meaning no LHE
 pythialist = {
@@ -887,6 +901,8 @@ branching_ratios = {
 ## description/comment/matching parameters/cross section/kfactor/matching efficiency
 
 gridpacklist = {
+    # Normalization must be supplied from the generated sample before computing yields.
+    'mg_pp_hhh_84TeV': ['HHH -> 4b2tau', 'SM with reweights', 'MadSpin', 'nan', '1.0', '1.0'],
     'dummy': ['NOT REGISTERED IN param_FCChh',
               'NOT REGISTERED IN param_FCChh',
               '1', '1', '1', '1'],

@@ -34,6 +34,15 @@ def lhe_weights(path, count):
     return result
 
 
+def weight_names(tree):
+    tree.GetEntry(0)
+    keys = [key.decode() if isinstance(key, bytes) else str(key)
+            for key in tree.GPStringKeys]
+    if "EventWeightNames" not in keys:
+        raise ValueError("No EventWeightNames metadata")
+    return [str(name) for name in tree.GPStringValues[keys.index("EventWeightNames")]]
+
+
 def inspect(path, lhe=None):
     source = ROOT.TFile.Open(path)
     if not source or source.IsZombie():
@@ -45,27 +54,31 @@ def inspect(path, lhe=None):
     if count != 10:
         raise ValueError(f"{path}: expected ten reconstructed events, found {count}")
     expected_weights = lhe_weights(lhe, count) if lhe else None
+    metadata = source.Get("metadata")
+    names = weight_names(metadata if metadata else events)
+    legacy_names = [f"rwgt_{number}" for number in range(1, 10)]
+    if names == legacy_names:
+        weight_count, offset = 9, 0
+    elif names == ["Weight", *legacy_names]:
+        weight_count, offset = 10, 1
+    else:
+        raise ValueError(f"{path}: incorrect weight names: {names}")
     for index in range(count):
         events.GetEntry(index)
         weights = events._EventHeader_weights
-        if len(weights) != 9 or not all(math.isfinite(value) for value in weights):
+        if len(weights) != weight_count or not all(math.isfinite(value) for value in weights):
             raise ValueError(f"{path}: event {index} has invalid HHH weights")
+        if offset and not math.isclose(weights[0], events.EventHeader[0].weight,
+                                       rel_tol=1e-5, abs_tol=1e-12):
+            raise ValueError(f"{path}: event {index} nominal weight differs from EventHeader.weight")
         if expected_weights is not None and any(
             not math.isclose(value, original, rel_tol=1e-5, abs_tol=1e-12)
-            for value, original in zip(weights, expected_weights[index])
+            for value, original in zip(weights[offset:], expected_weights[index])
         ):
             raise ValueError(f"{path}: event {index} weights differ from LHE")
-        if index == 0:
-            keys = [key.decode() if isinstance(key, bytes) else str(key)
-                    for key in events.GPStringKeys]
-            if "EventWeightNames" not in keys:
-                raise ValueError(f"{path}: no EventWeightNames metadata")
-            names = [str(name) for name in events.GPStringValues[keys.index("EventWeightNames")]]
-            if names != [f"rwgt_{number}" for number in range(1, 10)]:
-                raise ValueError(f"{path}: incorrect weight names: {names}")
     source.Close()
     return {"file": path, "events": count,
-            "weight_branch": "_EventHeader_weights", "weights_per_event": 9,
+            "weight_branch": "_EventHeader_weights", "weights_per_event": weight_count,
             "weight_names": names, "weights_match_lhe": lhe is not None}
 
 

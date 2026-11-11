@@ -8,15 +8,18 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 from pathlib import Path
 
 
 CARDS = Path(__file__).resolve().parent / "cards"
+sys.path.insert(0, str(CARDS.parents[2]))
+from EventProducer.config import param_FCChh as production
 DEFAULT_DELPHES = Path(os.environ.get(
     "HHH_DELPHES_BINARY",
-    "/data/atlas02/users/dingleyt/FCChh/key4/k4SimDelphes/build2/standalone/DelphesPythia8_EDM4HEP",
+    production.delphes_binary,
 ))
 WEIGHT_POINTS = [
     (-1.0, -1.0), (0.0, -2.0), (-2.0, 0.0),
@@ -45,14 +48,18 @@ def unpack_model(archive, destination):
 
 
 def generate_lhe(args):
-    if args.seed <= 0 or args.events <= 0:
-        raise ValueError("Seed and event count must be positive")
+    if args.seed <= 0 or not 1 <= args.events <= 10_000:
+        raise ValueError("Seed must be positive and each LHE must contain 1–10,000 events")
     mg5 = args.mg5_root.resolve() / "bin/mg5_aMC"
     if not mg5.is_file():
         raise FileNotFoundError(mg5)
     lhapdf = args.lhapdf_config.resolve()
     if not lhapdf.is_file():
         raise FileNotFoundError(lhapdf)
+    reweight_card = args.reweight_card.resolve()
+    madspin_card = args.madspin_card.resolve()
+    if not reweight_card.is_file() or not madspin_card.is_file():
+        raise FileNotFoundError(f"Missing reweight or MadSpin card: {reweight_card}, {madspin_card}")
     workdir = args.workdir.resolve()
     output = args.outdir.resolve() / f"events_{args.seed:09d}.lhe.gz"
     if output.exists():
@@ -78,8 +85,8 @@ def generate_lhe(args):
     run([mg5, "process.mg5"], workdir)
     if not (process / "Cards").is_dir():
         raise RuntimeError("MG5 did not create the process directory; check its output above")
-    shutil.copy2(CARDS / "reweight_card.dat", process / "Cards/reweight_card.dat")
-    shutil.copy2(CARDS / "madspin_card.dat", process / "Cards/madspin_card.dat")
+    shutil.copy2(reweight_card, process / "Cards/reweight_card.dat")
+    shutil.copy2(madspin_card, process / "Cards/madspin_card.dat")
     run([mg5, "launch.mg5"], workdir)
 
     candidates = sorted((process / "Events").glob("run_*_decayed_*/unweighted_events.lhe.gz"))
@@ -108,7 +115,7 @@ def simulate(args):
         with (gzip.open(args.lhe, "rb") if args.lhe.suffix == ".gz" else open(args.lhe, "rb")) as source:
             with (workdir / "events.lhe").open("wb") as target:
                 shutil.copyfileobj(source, target)
-        pythia = (CARDS / "mgp8_hhh_84TeV_btau.cmd").read_text()
+        pythia = args.pythia_card.read_text()
         pythia += f"\nBeams:LHEF = events.lhe\nRandom:seed = {args.seed}\nMain:numberOfEvents = {args.events}\n"
         (workdir / "card.cmd").write_text(pythia)
         run([binary, "FCChh_II.tcl", "edm4hep_output_config.tcl", "card.cmd", output], workdir)
@@ -120,10 +127,20 @@ def inspect_lhe(path, limit):
     ids, points, events, checked, bad_decays, bad_weights = [], [], 0, 0, 0, 0
     in_header = in_event = in_init = False
     beam = None
+    nominal = {}
+    param_block = None
     weight_definition = ""
     event_lines = []
     with opener(path, "rt") as stream:
         for line in stream:
+            block = re.match(r"^\s*Block\s+(\S+)", line, re.IGNORECASE)
+            if block:
+                param_block = block.group(1).lower()
+            elif param_block in ("tripcoup", "quartcoup"):
+                entry = re.match(r"^\s*(\d+)\s+([\d.eE+-]+)", line)
+                expected = 4 if param_block == "tripcoup" else 6
+                if entry and int(entry.group(1)) == expected:
+                    nominal[param_block] = float(entry.group(2))
             if "<initrwgt>" in line:
                 in_header = True
             elif "</initrwgt>" in line:
@@ -139,9 +156,10 @@ def inspect_lhe(path, limit):
                     weight_definition = ""
                     if match:
                         ids.append(match.group(1))
-                        trip = re.search(r"tripcoup(?:\s+\d+\s+|=)([-\d.]+)", match.group(2))
-                        quart = re.search(r"quartcoup(?:\s+\d+\s+|=)([-\d.]+)", match.group(2))
-                        points.append((float(trip.group(1)), float(quart.group(1))))
+                        trip = re.search(r"tripcoup(?:\s+4\s+|=)([\d.eE+-]+)", match.group(2))
+                        quart = re.search(r"quartcoup(?:\s+6\s+|=)([\d.eE+-]+)", match.group(2))
+                        points.append((float(trip.group(1)) if trip else nominal["tripcoup"],
+                                       float(quart.group(1)) if quart else nominal["quartcoup"]))
             if line.strip() == "<init>":
                 in_init = True
             elif line.strip() == "</init>":
@@ -168,7 +186,9 @@ def inspect_lhe(path, limit):
             elif in_event and checked < limit:
                 event_lines.append(line)
     report = {"file": str(path), "events": events, "checked": checked,
-              "beam": beam, "weight_ids": ids, "weight_points": points,
+              "beam": beam, "nominal_c3": nominal.get("tripcoup"),
+              "nominal_d4": nominal.get("quartcoup"),
+              "weight_ids": ids, "weight_points": points,
               "wrong_decay_events": bad_decays, "wrong_weight_events": bad_weights}
     if points != WEIGHT_POINTS or ids != [f"rwgt_{n}" for n in range(1, 10)]:
         raise ValueError(f"Unexpected weight map in {path}: {report}")
@@ -190,10 +210,17 @@ def main():
     lhe.add_argument("--outdir", type=Path, required=True)
     lhe.add_argument("--seed", type=int, required=True)
     lhe.add_argument("--events", type=int, default=10)
+    lhe.add_argument("--reweight-card", type=Path, default=CARDS / "reweight_card.dat",
+                     help="Reweight card (default: bundled nine-point card)")
+    lhe.add_argument("--madspin-card", type=Path, default=CARDS / "madspin_card.dat",
+                     help="MadSpin card (default: bundled 4b2tau card)")
     delphes = sub.add_parser("delphes", help="Shower and reconstruct an LHE sample")
     delphes.add_argument("--delphes", type=Path, default=DEFAULT_DELPHES,
                          help=f"Delphes executable (default: {DEFAULT_DELPHES})")
     delphes.add_argument("--lhe", type=Path, required=True)
+    delphes.add_argument("--pythia-card", type=Path,
+                         default=CARDS / "mgp8_hhh_84TeV_btau.cmd",
+                         help="Pythia card for the process (default: HHH signal card)")
     delphes.add_argument("--output", type=Path, required=True)
     delphes.add_argument("--seed", type=int, required=True)
     delphes.add_argument("--events", type=int, default=10)

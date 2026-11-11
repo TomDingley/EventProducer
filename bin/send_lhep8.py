@@ -5,6 +5,8 @@ import time
 import yaml
 import glob
 import re
+import shlex
+from pathlib import Path
 from select import select
 import EventProducer.common.utils as ut
 import EventProducer.common.makeyaml as my
@@ -12,7 +14,7 @@ import EventProducer.common.makeyaml as my
 class send_lhep8():
 
 #__________________________________________________________
-    def __init__(self,njobs, events, process, islsf, iscondor, islocal, queue, priority, ncpus, para, version, decay, pycard, detector, custom_edm4hep_config):
+    def __init__(self,njobs, events, process, islsf, iscondor, islocal, queue, priority, ncpus, para, version, decay, pycard, detector, custom_edm4hep_config, dry_run=False, prepare_only=False):
 
         self.njobs    = njobs
         self.events   = events
@@ -30,6 +32,8 @@ class send_lhep8():
         self.detector = detector
         self.user     = os.environ['USER']
         self.custom_edm4hep_config = custom_edm4hep_config
+        self.dry_run = dry_run
+        self.prepare_only = prepare_only
 
 #__________________________________________________________
     def send(self, force):
@@ -55,16 +59,16 @@ class send_lhep8():
 
             if prod_version_num >= 6:
                 # Base card
-                delphescards_base = os.path.join(self.para.delphescards_dir, self.version, self.detector, self.para.delphescard_base )
+                delphescards_base = os.path.join(self.para.delphescards_dir, self.para.delphescard_base)
                 
                 # Separate momentum resolution parametrization for muons
-                delphescards_mmr = os.path.join(self.para.delphescards_dir, self.version, self.detector, self.para.delphescard_mmr)
+                delphescards_mmr = os.path.join(self.para.delphescards_dir, self.para.delphescard_mmr)
             
                 # Separate momentum resolution parametrization for tracks
-                delphescards_mr = os.path.join(self.para.delphescards_dir, self.version, self.detector, self.para.delphescard_mr)
+                delphescards_mr = os.path.join(self.para.delphescards_dir, self.para.delphescard_mr)
 
                 # Separate momentum resolution parametrization for electrons - exists only from production v05 onwards!
-                delphescards_emr = os.path.join(self.para.delphescards_dir, self.version, self.detector, self.para.delphescard_emr)
+                delphescards_emr = os.path.join(self.para.delphescards_dir, self.para.delphescard_emr)
 
             else:
                 delphescards_base = '%s%s/%s'%(self.para.delphescards_dir,self.version,self.para.delphescard_base)
@@ -96,7 +100,7 @@ class send_lhep8():
         
         #Support for TrackCov card only added for > v07 onwards
         elif "FCChh" in self.para.module_name and "trackCov" in self.detector:
-            delphescards_base = os.path.join(self.para.delphescards_dir, self.version, self.detector, self.para.delphescard_base ).replace('DETECTOR',self.detector)
+            delphescards_base = os.path.join(self.para.delphescards_dir, self.para.delphescard_base).replace('DETECTOR',self.detector)
 
             if not os.path.isfile(delphescards_base):
                 raise Exception("ERROR in param_FCChh - the base Delphes card doesn't exist, at: "+delphescards_base)
@@ -208,7 +212,12 @@ class send_lhep8():
 
         # logdir=Dir+"/BatchOutputs/%s/%s/%s/%s/"%(acctype,self.version,self.detector,processp8)
         #TEMO OVERWRITE !!
-        logdir="/afs/cern.ch/work/b/bistapf/BatchOutputs/%s/%s/%s/%s/"%(acctype,self.version,self.detector,processp8)
+        logdir=str(Path(getattr(self.para, 'batch_dir', Dir+'/BatchOutputs')) / acctype / self.version / self.detector / processp8)
+
+        if self.dry_run:
+            print(f'Dry run: up to {self.njobs} Delphes jobs, {self.events} events/job; output {outdir}{processp8}')
+            print(f'LHE records: {self.para.yamldir}lhe/{self.process}; Pythia card: {pythiacard}')
+            return
 
         if not ut.dir_exist(logdir):
             os.system("mkdir -p %s"%logdir)
@@ -224,7 +233,7 @@ class send_lhep8():
 
         yamllhedir = '%s/lhe/%s'%(self.para.yamldir,self.process)
   
-        All_files = glob.glob("%s/events_*.yaml"%yamllhedir)
+        All_files = sorted(glob.glob("%s/events_*.yaml"%yamllhedir))
         if len(All_files)==0:
             print ('there is no LHE files checked for process %s exit'%self.process)
             print(' yamllhedir =',yamllhedir)
@@ -257,7 +266,7 @@ class send_lhep8():
                 except yaml.YAMLError as exc:
                     print(exc)
 
-            jobid=tmpf['processing']['jobid']
+            jobid=str(tmpf['processing']['jobid'])
             pythiaseed = jobid
             print("jobid = ",jobid)
             # because of too long seeds used in the KKMC production of Oct 10, 2021:
@@ -273,6 +282,7 @@ class send_lhep8():
                 outfile='%s/%s/events_%s.root'%(outdir,processp8,jobid)
                 if ut.file_exist(outfile):
                     print ('outfile already exist, continue  ',outfile)
+                    continue
 
             if self.islocal:
                 outfile='%s/events_%s.root'%(logdir,jobid)
@@ -292,57 +302,37 @@ class send_lhep8():
                 frun = open(frunfull, 'w')
 
             subprocess.getstatusoutput('chmod 777 %s'%(frunfull))
+            q = lambda value: shlex.quote(str(value))
             frun.write('#!/bin/bash\n')
-            frun.write('unset LD_LIBRARY_PATH\n')
-            frun.write('unset PYTHONHOME\n')
-            frun.write('unset PYTHONPATH\n')
-            frun.write('source %s\n'%(self.para.prodTag[self.version]))
-
-            frun.write('mkdir job%s_%s\n'%(jobid,processp8))
-            frun.write('cd job%s_%s\n'%(jobid,processp8))
-            frun.write('export EOS_MGM_URL=\"root://eospublic.cern.ch\"\n')
-            #frun.write('mkdir -p %s%s/%s\n'%(self.para.delphes_dir,self.version,processp8))
-            if self.islocal==False:
-                 #frun.write('mkdir -p %s%s/%s\n'%(self.para.delphes_dir,self.version,processp8))
-                 frun.write('mkdir -p %s/%s\n'%(outdir,processp8))
-
-            frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s .\n'%(tmpf['processing']['out']))
-            frun.write('gunzip -c %s > events.lhe\n'%tmpf['processing']['out'].split('/')[-1])          
-            frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s .\n'%(delphescards_base))
-            if "FCChh" in self.para.module_name and not "trackCov" in self.detector:
-                frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s card.tcl\n'%(delphescards_base))
-                frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s .\n'%(delphescards_mmr))
-                frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s .\n'%(delphescards_mr))
-                if delphescards_emr:
-                    frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s .\n'%(delphescards_emr))
-            elif "FCChh" in self.para.module_name:
-                frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s card.tcl\n'%(delphescards_base))
-            if 'FCCee' not in self.para.module_name:
-                # frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s config.py \n'%(fccconfig))
-                #use the standard k4simdelphes edm4hep output config for FCC-hh production:
-                if self.custom_edm4hep_config:
-                    frun.write('cp {} ./edm4hep_output_config.tcl \n'.format(self.custom_edm4hep_config))
-                else:
-                    frun.write('cp $K4SIMDELPHES/edm4hep_output_config.tcl .\n')
+            frun.write('unset LD_LIBRARY_PATH\nunset PYTHONHOME\nunset PYTHONPATH\n')
+            frun.write('source %s || exit 1\n' % self.para.prodTag[self.version])
+            frun.write('mkdir job%s_%s || exit 1\n' % (jobid, processp8))
+            frun.write('cd job%s_%s || exit 1\n' % (jobid, processp8))
+            frun.write('mkdir -p %s || exit 1\n' % q(Path(outfile).parent))
+            frun.write('cp %s events.lhe.gz || exit 1\n' % q(tmpf['processing']['out']))
+            frun.write('gunzip -c events.lhe.gz > events.lhe || exit 1\n')
+            frun.write('cp %s card.tcl || exit 1\n' % q(delphescards_base))
+            if 'FCChh' in self.para.module_name and 'trackCov' not in self.detector:
+                for card in (delphescards_mmr, delphescards_mr, delphescards_emr):
+                    if card:
+                        frun.write('cp %s . || exit 1\n' % q(card))
+            if self.custom_edm4hep_config:
+                edm_config = Path(self.custom_edm4hep_config).resolve()
+            elif 'FCChh' in self.para.module_name:
+                edm_config = Path(self.para.fccconfig_dir) / self.para.fccconfig
             else:
-                frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py /eos/experiment/fcc/ee/generation/FCC-config/%s/FCCee/Delphes/edm4hep_%s.tcl edm4hep_output_config.tcl\n'%(self.version,self.detector))
-                frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s card.tcl\n'%(delphescards_base))
-
-
-
-            frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py %s card.cmd\n'%(pythiacard))
+                edm_config = Path('/eos/experiment/fcc/ee/generation/FCC-config') / self.version / 'FCCee/Delphes' / ('edm4hep_%s.tcl' % self.detector)
+            if not edm_config.is_file():
+                raise FileNotFoundError(edm_config)
+            frun.write('cp %s edm4hep_output_config.tcl || exit 1\n' % q(edm_config))
+            frun.write('cp %s card.cmd || exit 1\n' % q(pythiacard))
             frun.write('echo "Beams:LHEF = events.lhe" >> card.cmd\n')
-            frun.write('echo "Random:seed = %s" >> card.cmd\n'%pythiaseed.lstrip('0'))
-            frun.write('echo "Main:numberOfEvents = %i" >> card.cmd\n'%(self.events))
-
-            #TEMP OVERWRITE TO USE LOCAL VERSION OF k4SimDelphes
-            # frun.write('/afs/cern.ch/user/b/bistapf/Dev_k4SimDelphes/k4SimDelphes/build/standalone/DelphesPythia8_EDM4HEP card.tcl edm4hep_output_config.tcl card.cmd events_%s.root\n'%(jobid))
-            frun.write('DelphesPythia8_EDM4HEP card.tcl edm4hep_output_config.tcl card.cmd events_%s.root\n'%(jobid))
-
-            frun.write('python /afs/cern.ch/work/f/fccsw/public/FCCutils/eoscopy.py events_%s.root %s\n'%(jobid,outfile))
-
-            frun.write('cd ..\n')
-            frun.write('rm -rf job%s_%s\n'%(jobid,processp8))
+            frun.write('echo "Random:seed = %s" >> card.cmd\n' % int(pythiaseed))
+            event_count = min(self.events, int(tmpf['processing']['nevents']))
+            frun.write('echo "Main:numberOfEvents = %i" >> card.cmd\n' % event_count)
+            binary = getattr(self.para, 'delphes_binary', 'DelphesPythia8_EDM4HEP')
+            frun.write('%s card.tcl edm4hep_output_config.tcl card.cmd events.root || exit 1\n' % q(binary))
+            frun.write('cp events.root %s || exit 1\n' % q(outfile))
             frun.close()
 
             if self.islsf==True :
@@ -360,6 +350,10 @@ class send_lhep8():
                 nbjobsSub+=1
                 os.system('%s'%frunfull)
 
+
+        if nbjobsSub == 0:
+            print('No eligible LHE files to submit')
+            return
 
         if self.iscondor==True :
             # clean string
@@ -401,16 +395,21 @@ class send_lhep8():
             frun_condor.write('+JobFlavour    = "%s"\n'%self.queue)
             frun_condor.write('+AccountingGroup = "%s"\n'%self.priority)
             frun_condor.write('RequestCpus = %s\n'%self.ncpus)
+            frun_condor.write('request_memory = 8 GB\nrequest_disk = 10 GB\n')
+            frun_condor.write('should_transfer_files = YES\nwhen_to_transfer_output = ON_EXIT\ntransfer_output_files = ""\n')
 
             frun_condor.write('queue filename matching files %s\n'%condor_file_str)
             frun_condor.close()
             #
-            nbjobsSub=0
             cmdBatch="condor_submit %s"%frunfull_condor
             print (cmdBatch)
-            job=ut.SubmitToCondor(cmdBatch,10,"%i/%i"%(nbjobsSub,self.njobs))
-            nbjobsSub+=job
+            if self.prepare_only:
+                print('Prepared jobs only; submit with:', cmdBatch)
+            else:
+                job=ut.SubmitToCondor(cmdBatch,10,"%i/%i"%(nbjobsSub,self.njobs))
+                if not job:
+                    raise RuntimeError('Condor submission failed')
 
-        print ('succesfully sent %i  job(s)'%nbjobsSub)
+        print('%s %i job(s)' % ('Prepared' if self.prepare_only else 'Submitted', nbjobsSub))
 
 

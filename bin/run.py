@@ -2,6 +2,9 @@
 
 import sys
 import argparse
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # _____________________________________________________________________________
 def main():
@@ -35,7 +38,7 @@ def main():
     sendjobGroup.add_argument('--typestdhep', type=str, required = '--send' in sys.argv and '--STDHEP'  in sys.argv , help='type of jobs to send', choices = ['wzp6'])
 
     sendjobGroup.add_argument('-q', '--queue', type=str, default='workday', help='lxbatch queue (default: workday for HTCONDOR)', choices=['1nh','8nh','1nd','2nd','1nw','espresso','microcentury','longlunch','workday','tomorrow','testmatch','nextweek'])
-    sendjobGroup.add_argument('--priority', type=str, default='group_u_FCC.local_gen', help='condor queue priority (default: group_u_FCC.local_gen)')
+    sendjobGroup.add_argument('--priority', type=str, default='', help='Optional Condor accounting group')
     sendjobGroup.add_argument('--ncpus', type=str, default='1', help='number of CPUs (1CPU=2Gb of RAM)')
 
 #41873
@@ -52,14 +55,20 @@ def main():
     # 1w -> nextweek
     sendjobGroup.add_argument('-n','--numEvents', type=int, help='Number of simulation events per job', default=10000)
     sendjobGroup.add_argument('-N','--numJobs', type=int, default = 10, help='Number of jobs to submit')
+    sendjobGroup.add_argument('--output-dir', type=Path, help='FCChh production root (default: EventProducer checkout)')
+    mode = sendjobGroup.add_mutually_exclusive_group()
+    mode.add_argument('--dry-run', action='store_true', help='Show the submission plan without writing files or submitting')
+    mode.add_argument('--prepare-only', action='store_true', help='Write job files without submitting')
 
     #option for running FCC-hh Delphes card validation, using an adapted edm4hep_output config, should only work with option reco. 
     sendjobGroup.add_argument('--customEDM4HEPOutput', type=str, default="", help="Use a custom edm4hep output config card, by providing the path.")
 
     mgGroup = parser.add_argument_group('mggroup')
-    mgGroup.add_argument("--mg5card", type=str, help="MG5 configuration", default='card.mg5')
+    mgGroup.add_argument("--mg5card", type=str, help="MG5 configuration (default: process card in this repository)")
     mgGroup.add_argument("--cutfile", type=str, help="additional cuts", default='cuts.f')
-    mgGroup.add_argument("--model", type=str, help="extra model", default='model.tgz')
+    mgGroup.add_argument("--model", type=str, help="Extra model archive")
+    mgGroup.add_argument('--reweight-card', type=str, help='MG5 reweight card (HHH: bundled card by default)')
+    mgGroup.add_argument('--madspin-card', type=str, help='MG5 MadSpin card (HHH: bundled card by default)')
     #option to run LHE production with MG in centos7 container 
     mgGroup.add_argument("--centos7", action='store_true', help="Legacy option to run MG5 LHE production in centos7 container.")
     mgGroup.add_argument("--useV3", action='store_true', help="option to run MG5 LHE production with V3.6.3pre of MG5.")
@@ -72,7 +81,7 @@ def main():
     batchGroup = parser.add_mutually_exclusive_group(required = '--send' in sys.argv) # Where to submit jobs
     batchGroup.add_argument("--lsf", action='store_true', help="Submit with LSF")
     batchGroup.add_argument("--condor", action='store_true', help="Submit with condor")
-    batchGroup.add_argument("--local", action='store_true', help="run locally (will not copy files on eos")
+    batchGroup.add_argument("--local", action='store_true', help="Run reconstruction in the foreground")
 
 
 
@@ -112,7 +121,7 @@ def main():
             if v  not in decaylist: decaylist.append(v)
 
     sendjobGroup.add_argument('-d', '--decay', type=str, default='', help='pythia8 decay when needed', choices=decaylist)
-    sendjobGroup.add_argument('--pycard', type=str, default='p8_ee_default.cmd', help='pythia8 card')
+    sendjobGroup.add_argument('--pycard', type=str, help='Pythia8 card (default: configured process card)')
 
     processlist=[]
     if (args.reco and args.type=="p8") or args.check or args.checkeos or args.clean or args.cleanold or args.merge or args.remove:
@@ -137,8 +146,31 @@ def main():
     parser.add_argument('-p','--process', type=str, help='Name of the process to use to send jobs or for the check', default='', choices=processlist)
     parser.add_argument('--force', action='store_true', help='Force the type of process', default=False)
 
-    args, _ = parser.parse_known_args()
+    args = parser.parse_args()
     version = args.prodtag
+    if args.FCChh:
+        if args.output_dir:
+            para.set_output_dir(args.output_dir)
+        args.mg5card = args.mg5card or para.mg5_cards.get(args.process, str(para.repo_dir / 'mg5/examples' / f'{args.process}.mg5'))
+        args.model = args.model or para.models.get(args.process, '')
+        args.reweight_card = args.reweight_card or para.reweight_cards.get(args.process, '')
+        args.madspin_card = args.madspin_card or para.madspin_cards.get(args.process, '')
+        args.pycard = args.pycard or para.pythia_cards.get(args.process, 'p8_pp_default.cmd')
+        if not args.dry_run:
+            (para.production_dir / 'statistics').mkdir(parents=True, exist_ok=True)
+            (para.production_dir / 'dicts').mkdir(parents=True, exist_ok=True)
+    else:
+        if args.output_dir:
+            parser.error('--output-dir is currently supported for FCChh production')
+        args.mg5card = args.mg5card or 'card.mg5'
+        args.model = args.model or ''
+        args.pycard = args.pycard or 'p8_ee_default.cmd'
+    if args.send and (args.numJobs <= 0 or not 1 <= args.numEvents <= 10000):
+        parser.error('Use a positive job count and 1–10,000 events per job')
+    if (args.dry_run or args.prepare_only) and not (args.send and ((args.LHE and args.typelhe == 'mg') or (args.reco and args.type == 'lhep8'))):
+        parser.error('--dry-run and --prepare-only apply to MG5 LHE and LHE-to-Delphes submissions')
+    if args.prepare_only and not args.condor:
+        parser.error('--prepare-only requires --condor')
     print("INFO: Running version:", version)
     detector = args.detector
     training = False
@@ -275,7 +307,7 @@ def main():
 
                 print ('preparing to send lhe jobs from madgraph standalone for process {}'.format(args.process))
                 import EventProducer.bin.send_mglhe as mglhe
-                sendlhe=mglhe.send_mglhe( args.lsf, args.condor, args.mg5card, args.cutfile, args.model, para, args.process, args.numJobs, args.numEvents, args.queue, args.priority, args.ncpus, args.centos7, args.useV3, args.plugin)
+                sendlhe=mglhe.send_mglhe( args.lsf, args.condor, args.mg5card, args.cutfile, args.model, para, args.process, args.numJobs, args.numEvents, args.queue, args.priority, args.ncpus, args.centos7, args.useV3, args.plugin, args.reweight_card, args.madspin_card, args.dry_run, args.prepare_only)
                 sendlhe.send()
 
             elif args.typelhe == 'kkmc' :
@@ -297,7 +329,7 @@ def main():
             if sendOpt == 'lhep8':
                 print ('preparing to send FCCSW jobs from lhe')
                 import EventProducer.bin.send_lhep8 as slhep8
-                sendlhep8=slhep8.send_lhep8(args.numJobs,args.numEvents, args.process, args.lsf, args.condor, args.local, args.queue, args.priority, args.ncpus, para, version, args.decay, args.pycard, detector, args.customEDM4HEPOutput)
+                sendlhep8=slhep8.send_lhep8(args.numJobs,args.numEvents, args.process, args.lsf, args.condor, args.local, args.queue, args.priority, args.ncpus, para, version, args.decay, args.pycard, detector, args.customEDM4HEPOutput, args.dry_run, args.prepare_only)
                 sendlhep8.send(args.force)
             elif sendOpt == 'p8':
                 print ('preparing to send FCCSW jobs from pythia8 directly')

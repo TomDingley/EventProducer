@@ -12,6 +12,9 @@ launch DUMMYPROCESS
 reweight=ON
 madspin=ON
 
+set tripcoup 4 0
+set quartcoup 6 0
+
 set iseed DUMMYSEED
 set nevents DUMMYNEVENTS
 

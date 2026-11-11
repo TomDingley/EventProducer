@@ -1,8 +1,11 @@
 EventProducer
 =============
 
-This package is used to centrally produced events for FCC-hh at a center of mass of 100 TeV and for FCC-ee. Any other future collider can also be supported by this framework. 
-In order to use it, please get in contact with the FCC software and computing coordinators as running this package requieres specific rights.
+This checkout uses local shared storage by default for FCC-hh production.
+Configure paths in `config/param_FCChh.py`, then use the normal `bin/run.py`
+LHE and reconstruction commands. See [the local production instructions](hhh/README.md)
+for HHH and the five backgrounds. The FCC-ee instructions below describe the
+original central production workflow.
 
 
 Table of contents
